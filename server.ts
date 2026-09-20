@@ -98,27 +98,93 @@ async function startServer() {
     let videoTitle = 'Sans titre';
     let selectedStreamUrl = '';
 
-    // Stratégie 1: Utilisation de youtubei.js (Innertube client Android) pour obtenir les flux MP4 directs googlevideo
+    // Récupération rapide du titre via YouTube oEmbed (léger, public, sans blocage IP)
     try {
-      const yt = await getInnertube();
-      const info = await yt.getBasicInfo(videoId);
-      videoTitle = info.basic_info?.title || 'Sans titre';
-
-      const formats = info.streaming_data?.formats || [];
-      // Cherche les formats combinés (vidéo + audio) ayant une URL directe
-      const combined = formats.filter((f: any) => f.has_video && f.has_audio && Boolean(f.url));
-      if (combined.length > 0) {
-        // Trier par résolution décroissante (720p > 360p)
-        combined.sort((a: any, b: any) => (b.height || 0) - (a.height || 0));
-        selectedStreamUrl = combined[0].url;
-      } else if (formats.length > 0 && formats[0].url) {
-        selectedStreamUrl = formats[0].url;
+      const oembedUrl = `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`;
+      const oembedRes = await fetch(oembedUrl, { signal: AbortSignal.timeout(4000) });
+      if (oembedRes.ok) {
+        const oembedData = await oembedRes.json();
+        if (oembedData?.title) {
+          videoTitle = oembedData.title;
+        }
       }
-    } catch (innertubeErr: any) {
-      console.warn('Innertube warning, tentative avec @distube/ytdl-core:', innertubeErr?.message);
+    } catch {
+      // Ignore oembed failure, title will be determined by extractors
     }
 
-    // Stratégie 2 (Fallback): @distube/ytdl-core avec playerClients
+    // Stratégie 1: Requêtes fetch() HTTP natives vers les instances publiques de Cobalt (aucun SDK ni clé requise)
+    // Conforme à la délégation directe via fetch() natif (ex: api.cobalt.tools / co.wuk.sh)
+    const publicCobaltInstances = [
+      {
+        url: 'https://api.cobalt.tools/',
+        body: { url: targetUrl, videoQuality: '720' }
+      },
+      {
+        url: 'https://co.wuk.sh/api/json',
+        body: { url: targetUrl, vCodec: 'h264', vQuality: '720' }
+      },
+      {
+        url: 'https://cobalt.api.timelessoses.vip/',
+        body: { url: targetUrl, videoQuality: '720' }
+      },
+      {
+        url: 'https://cobalt-api.kwiatekm.tokyo/',
+        body: { url: targetUrl, videoQuality: '720' }
+      }
+    ];
+
+    for (const instance of publicCobaltInstances) {
+      try {
+        const cobaltRes = await fetch(instance.url, {
+          method: 'POST',
+          headers: {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+          },
+          body: JSON.stringify(instance.body),
+          signal: AbortSignal.timeout(4000)
+        });
+
+        if (cobaltRes.ok) {
+          const cobaltData: any = await cobaltRes.json();
+          const extractedUrl = cobaltData.url || cobaltData.streamUrl;
+          if (extractedUrl) {
+            selectedStreamUrl = extractedUrl;
+            if ((!videoTitle || videoTitle === 'Sans titre') && (cobaltData.title || cobaltData.filename)) {
+              videoTitle = cobaltData.title || cobaltData.filename;
+            }
+            break;
+          }
+        }
+      } catch (err: any) {
+        // En cas d'échec ou timeout sur cette instance, continue vers la suivante
+      }
+    }
+
+    // Stratégie 2 (Fallback): youtubei.js (Innertube client Android) pour obtenir les flux MP4 directs googlevideo
+    if (!selectedStreamUrl) {
+      try {
+        const yt = await getInnertube();
+        const info = await yt.getBasicInfo(videoId);
+        if (!videoTitle || videoTitle === 'Sans titre') {
+          videoTitle = info.basic_info?.title || 'Sans titre';
+        }
+
+        const formats = info.streaming_data?.formats || [];
+        const combined = formats.filter((f: any) => f.has_video && f.has_audio && Boolean(f.url));
+        if (combined.length > 0) {
+          combined.sort((a: any, b: any) => (b.height || 0) - (a.height || 0));
+          selectedStreamUrl = combined[0].url;
+        } else if (formats.length > 0 && formats[0].url) {
+          selectedStreamUrl = formats[0].url;
+        }
+      } catch (innertubeErr: any) {
+        console.warn('Innertube fallback warning:', innertubeErr?.message);
+      }
+    }
+
+    // Stratégie 3 (Fallback ultime): @distube/ytdl-core avec playerClients
     if (!selectedStreamUrl) {
       try {
         const info = await ytdl.getInfo(videoId, {
