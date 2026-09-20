@@ -1,0 +1,6 @@
+{
+  "name": "YouTube URL Resolver API",
+  "description": "Ultra-lightweight YouTube URL resolver REST API for mobile bookmarklets with full CORS support and direct MP4 stream extraction.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
